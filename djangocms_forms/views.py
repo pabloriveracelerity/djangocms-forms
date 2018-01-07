@@ -9,6 +9,9 @@ from django.utils.http import is_safe_url
 from django.utils.html import strip_tags
 from django.utils.translation import ugettext_lazy as _
 from django.views.generic import FormView
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
 
 from .forms import FormBuilder
 from .models import FormDefinition
@@ -22,6 +25,7 @@ except ImportError:
     from .compat import JsonResponse
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class FormSubmission(FormView):
     form_class = FormBuilder
     http_method_names = ['post']
