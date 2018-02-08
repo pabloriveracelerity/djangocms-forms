@@ -91,6 +91,7 @@
         formValid: function(response) {
             $(this.settings.formSuccess, this.el).fadeIn('slow');
             $(this.settings.formWrapper, this.el).slideUp('slow').remove();
+            $('html, body').animate({scrollTop: $(this.settings.formSuccess).offset().top - 200}, 500);
             if (response.redirectUrl) {
                 setTimeout(function() {
                     window.location = response.redirectUrl;
