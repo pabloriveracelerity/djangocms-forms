@@ -140,8 +140,6 @@ class FormSubmissionAdmin(admin.ModelAdmin):
     def export_view(self, request, form_url=''):
         """The 'export' admin view for this model."""
         
-        logger.debug('admin export_view')
-
         info = self.opts.app_label, self.opts.model_name
 
         if not self.has_export_permission(request):
