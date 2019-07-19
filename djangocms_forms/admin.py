@@ -3,6 +3,7 @@
 from __future__ import unicode_literals
 
 import datetime
+import logging
 from functools import update_wrapper
 
 from django.contrib import admin, messages
@@ -41,6 +42,7 @@ try:
 except ImportError:
     from .compat import JsonResponse
 
+logger = logging.getLogger('djangocms_forms')
 
 class FormFilter(admin.SimpleListFilter):
     title = _('Forms')
@@ -137,6 +139,8 @@ class FormSubmissionAdmin(admin.ModelAdmin):
 
     def export_view(self, request, form_url=''):
         """The 'export' admin view for this model."""
+        
+        logger.debug('admin export_view')
 
         info = self.opts.app_label, self.opts.model_name
 
@@ -146,101 +150,106 @@ class FormSubmissionAdmin(admin.ModelAdmin):
         form = SubmissionExportForm(data=request.POST if request.method == 'POST' else None)
 
         if form.is_valid():
-            data = form.cleaned_data
-            queryset = self.get_queryset(request) \
-                .filter(plugin_id=data.get('form')) \
-                .select_related('created_by', 'plugin', )
+            try:
+                data = form.cleaned_data
+                queryset = self.get_queryset(request) \
+                    .filter(plugin_id=data.get('form')) \
+                    .select_related('created_by', 'plugin', )
 
-            from_date, to_date = data.get('from_date'), data.get('to_date')
-            headers = data.get('headers', [])
+                from_date, to_date = data.get('from_date'), data.get('to_date')
+                headers = data.get('headers', [])
 
-            if from_date:
-                queryset = queryset.filter(creation_date__gte=from_date)
-            if to_date:
-                queryset = queryset.filter(creation_date__lt=to_date + datetime.timedelta(days=1))
+                if from_date:
+                    queryset = queryset.filter(creation_date__gte=from_date)
+                if to_date:
+                    queryset = queryset.filter(creation_date__lt=to_date + datetime.timedelta(days=1))
 
-            if not queryset.exists():
-                message = _('No matching %s found for the given criteria. '
-                            'Please try again.') % self.opts.verbose_name_plural
-                self.message_user(request, message, level=messages.WARNING)
-                if request.is_ajax():
-                    data = {
-                        'reloadBrowser': True,
-                        'submissionCount': 0,
-                    }
-                    return JsonResponse(data)
-                return redirect('admin:%s_%s_export' % info)
+                if not queryset.exists():
+                    message = _('No matching %s found for the given criteria. '
+                                'Please try again.') % self.opts.verbose_name_plural
+                    self.message_user(request, message, level=messages.WARNING)
+                    if request.is_ajax():
+                        data = {
+                            'reloadBrowser': True,
+                            'submissionCount': 0,
+                        }
+                        return JsonResponse(data)
+                    return redirect('admin:%s_%s_export' % info)
 
-            latest_submission = queryset[:1].get()
-            dataset = Dataset(title=Truncator(latest_submission.plugin.name).chars(31))
+                latest_submission = queryset[:1].get()
+                dataset = Dataset(title=Truncator(latest_submission.plugin.name).chars(31))
 
-            if not headers:
-                headers = [field['label'].strip() for field in latest_submission.form_data]
+                if not headers:
+                    headers = [field['label'].strip() for field in latest_submission.form_data]
+                    for submission in queryset:
+                        for field in submission.form_data:
+                            label = field['label'].strip()
+                            if label not in headers:
+                                headers.append(label)
+
+                    if request.is_ajax():
+                        data = {
+                            'reloadBrowser': False,
+                            'submissionCount': queryset.count(),
+                            'availableHeaders': headers,
+                        }
+                        return JsonResponse(data)
+
+                headers.extend(['Submitted By', 'Submitted on', 'Sender IP', 'Referrer URL'])
+                dataset.headers = headers
+
+                def humanize(field):
+                    value = field['value']
+                    field_type = field['type']
+
+                    if value in (None, '', [], (), {}):
+                        return None
+
+                    if field_type == 'checkbox':
+                        value = yesno(bool(value), u'{0},{1}'.format(_('Yes'), _('No')))
+                    if field_type == 'checkbox_multiple':
+                        value = ', '.join(list(value))
+                    return value
+
                 for submission in queryset:
+                    row = [None] * len(headers)
                     for field in submission.form_data:
                         label = field['label'].strip()
-                        if label not in headers:
-                            headers.append(label)
+                        if label in headers:
+                            row[headers.index(label)] = humanize(field)
 
-                if request.is_ajax():
-                    data = {
-                        'reloadBrowser': False,
-                        'submissionCount': queryset.count(),
-                        'availableHeaders': headers,
-                    }
-                    return JsonResponse(data)
+                        row[-4] = force_text(submission.created_by or _('Unknown')) 
+                        row[-3] = submission.creation_date.strftime(
+                            settings.DJANGOCMS_FORMS_DATETIME_FORMAT)
+                        row[-2] = submission.ip
+                        row[-1] = submission.referrer
+                    dataset.append(row)
 
-            headers.extend(['Submitted By', 'Submitted on', 'Sender IP', 'Referrer URL'])
-            dataset.headers = headers
+                mimetype = {
+                    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'csv': 'text/csv',
+                    'html': 'text/html',
+                    'yaml': 'text/yaml',
+                    'json': 'application/json',
+                }
 
-            def humanize(field):
-                value = field['value']
-                field_type = field['type']
+                file_type = data.get('file_type', 'xlsx')
+                filename = settings.DJANGOCMS_FORMS_EXPORT_FILENAME.format(
+                    form_name=slugify(latest_submission.plugin.name))
+                filename = timezone.now().strftime(filename)
+                filename = '%s.%s' % (filename, file_type)
 
-                if value in (None, '', [], (), {}):
-                    return None
+                response = HttpResponse(
+                    getattr(dataset, file_type), {
+                        'content_type': mimetype.get(file_type, 'application/octet-stream')
+                    })
 
-                if field_type == 'checkbox':
-                    value = yesno(bool(value), u'{0},{1}'.format(_('Yes'), _('No')))
-                if field_type == 'checkbox_multiple':
-                    value = ', '.join(list(value))
-                return value
+                response['Content-Disposition'] = 'attachment; filename=%s' % filename
+                return response
 
-            for submission in queryset:
-                row = [None] * len(headers)
-                for field in submission.form_data:
-                    label = field['label'].strip()
-                    if label in headers:
-                        row[headers.index(label)] = humanize(field)
-
-                    row[-4] = force_text(submission.created_by or _('Unknown')) 
-                    row[-3] = submission.creation_date.strftime(
-                        settings.DJANGOCMS_FORMS_DATETIME_FORMAT)
-                    row[-2] = submission.ip
-                    row[-1] = submission.referrer
-                dataset.append(row)
-
-            mimetype = {
-                'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'csv': 'text/csv',
-                'html': 'text/html',
-                'yaml': 'text/yaml',
-                'json': 'application/json',
-            }
-
-            file_type = data.get('file_type', 'xlsx')
-            filename = settings.DJANGOCMS_FORMS_EXPORT_FILENAME.format(
-                form_name=slugify(latest_submission.plugin.name))
-            filename = timezone.now().strftime(filename)
-            filename = '%s.%s' % (filename, file_type)
-
-            response = HttpResponse(
-                getattr(dataset, file_type), {
-                    'content_type': mimetype.get(file_type, 'application/octet-stream')
-                })
-
-            response['Content-Disposition'] = 'attachment; filename=%s' % filename
-            return response
+            except Exception as e:
+                logger.exception(e)
+                logger.debug(e)
 
         # Wrap in all admin layout
         fieldsets = ((None, {'fields': form.fields.keys()}),)
