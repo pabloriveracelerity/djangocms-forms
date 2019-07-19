@@ -36,13 +36,16 @@ try:
 except ImportError:
     from django.contrib.admin.util import unquote
 
-
 try:
     from django.http import JsonResponse
 except ImportError:
     from .compat import JsonResponse
 
-logger = logging.getLogger('djangocms_forms')
+logger = None
+try:
+    logger = logging.getLogger('djangocms_forms')
+except:
+    pass
 
 class FormFilter(admin.SimpleListFilter):
     title = _('Forms')
@@ -246,8 +249,11 @@ class FormSubmissionAdmin(admin.ModelAdmin):
                 return response
 
             except Exception as e:
-                logger.exception(e)
-                logger.debug(e)
+                if logger:
+                    logger.exception(e)
+                    logger.debug(e)
+                else:
+                    pass
 
         # Wrap in all admin layout
         fieldsets = ((None, {'fields': form.fields.keys()}),)

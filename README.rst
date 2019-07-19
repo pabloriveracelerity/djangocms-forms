@@ -59,6 +59,16 @@ Quickstart
 
 You can register a new site via https://www.google.com/recaptcha/admin
 
+6. Setup logging (optional, but recommended):
+    LOGGING = {
+	    ...
+	    'loggers': {
+	        'djangocms_forms': {
+	            'handlers': [...],
+	            'level': '...',
+	        },
+		}
+	}
 
 
 Configuration
